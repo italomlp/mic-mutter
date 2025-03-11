@@ -1,11 +1,18 @@
+use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    Manager,
 };
 
 use coreaudio_sys::*;
 use std::mem;
 use std::ptr;
+
+#[derive(Default)]
+struct AppState {
+    is_muted: bool,
+}
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -42,6 +49,27 @@ fn get_default_input_device() -> Option<AudioObjectID> {
     }
 }
 
+fn get_mute_state(
+    device_id: u32,
+    size: usize,
+    property_address: AudioObjectPropertyAddress,
+) -> (i32, u32) {
+    let mut mute_state: u32 = 0;
+
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            device_id,
+            &property_address,
+            0,
+            ptr::null(),
+            &mut (size as u32),
+            &mut mute_state as *mut _ as *mut _,
+        )
+    };
+
+    return (status, mute_state);
+}
+
 #[tauri::command]
 fn toggle_mic() {
     if let Some(device_id) = get_default_input_device() {
@@ -51,21 +79,10 @@ fn toggle_mic() {
             mElement: kAudioObjectPropertyElementMaster,
         };
 
-        let mut mute_state: u32 = 0;
         let size = mem::size_of::<u32>();
+        let (get_mute_state_status, mute_state) = get_mute_state(device_id, size, property_address);
 
-        let status = unsafe {
-            AudioObjectGetPropertyData(
-                device_id,
-                &property_address,
-                0,
-                ptr::null(),
-                &mut (size as u32),
-                &mut mute_state as *mut _ as *mut _,
-            )
-        };
-
-        if status == 0 {
+        if get_mute_state_status == 0 {
             let new_state = if mute_state == 0 { 1 } else { 0 };
 
             let status = unsafe {
@@ -99,6 +116,8 @@ fn toggle_mic() {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            app.manage(Mutex::new(AppState::default()));
+
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let toggle_i =
                 MenuItem::with_id(app, "toggle_mute", "Toggle mute", true, None::<&str>)?;
